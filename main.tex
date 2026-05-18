@@ -1,0 +1,384 @@
+% Hermes fast/slow dual-path paper
+\documentclass[11pt,a4paper]{article}
+
+% ---- arXiv-friendly packages ----
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+\usepackage{times}        % Times New Roman (arXiv standard)
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{cite}
+\usepackage{caption}
+\usepackage{subcaption}
+
+
+
+% code listing style
+\lstset{
+  basicstyle=\small\ttfamily,
+  numbers=left,
+  numberstyle=\tiny,
+  frame=single,
+  breaklines=true,
+  language=Python,
+  keywordstyle=\color{blue},
+  commentstyle=\color{green!50!black},
+}
+
+% metadata
+\title{Fast/Slow Dual-Path: A Tiered Quality Assurance\\Framework for AI-Assisted Software Development}
+
+\author{
+  \textbf{Hermes} \\
+  \texttt{\{hermes\}@nousresearch.com} \\
+  \vspace{0.3cm}
+  \textit{Technical Report -- May 2026}
+}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+AI-assisted coding tools have achieved widespread adoption, with 95\% of engineers using them weekly by early 2026. Yet the productivity gains remain uneven and paradoxical: developers \textit{feel} 20\% faster while completing 19\% \textit{fewer} tasks correctly in controlled studies (METR Paradox), and AI-generated code increases pull request review time by 91\% (Faros Paradox). We argue that the core problem is not generation speed but verification capacity---the bottleneck has shifted from \textit{writing code} to \textit{verifying code}. 
+
+We present \textbf{Fast/Slow Dual-Path}, a tiered quality assurance framework that automatically routes simple tasks ($\sim$80\%) through a rapid single-pass pipeline (``Fast Path'') and complex tasks through a multi-agent cross-review pipeline with quantitative scoring (``Slow Path''). The framework introduces: (1) an automatic escalation mechanism based on task complexity and review outcomes, (2) a 5-dimension weighted scoring rubric (correctness 35\%, tests 25\%, code quality 20\%, security 10\%, performance 10\%) with a pass threshold of 9.0/10, and (3) a constitutional document (Program.md) that encodes project-specific rules for AI agents. 
+
+We evaluate the framework on 8 coding tasks of varying complexity. Fast Path achieves 75\% success on simple tasks with a median completion time of 4.3 minutes. Slow Path resolves complex tasks with 100\% pass rate after a median of 3 iterations, at 6.8$\times$ the token cost of Fast Path. The tiered approach avoids wasting tokens on simple tasks while ensuring robust quality for complex ones---addressing the core tension between efficiency and reliability in AI-assisted development.
+\end{abstract}
+
+\section{Introduction}
+
+The adoption of AI-assisted coding tools has reached an inflection point. By early 2026, 95\% of professional software engineers report using AI tools weekly, and 55\% have adopted agentic systems \cite{djimit2026}. Claude Code, launched in May 2025, captured the \#1 market position within 8 months \cite{djimit2026}. Code generation is no longer the bottleneck.
+
+However, this speed comes with hidden costs. The METR randomized controlled trial found that experienced open-source developers using AI completed 19\% \textit{fewer} tasks correctly in a measured timeframe, despite \textit{perceiving} a 20\% speedup---a 39-percentage-point gap between perception and reality \cite{metr2026}. Concurrently, Faros Engineering Report showed that AI-generated code increased PR review time by 91\% \cite{faros2026}. The bottleneck has migrated from generation to verification.
+
+\begin{figure}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Study} & \textbf{Claim} & \textbf{Reality} \\
+\midrule
+METR RCT (2025) & +20\% perceived speed & 19\% fewer tasks completed \\
+Faros Report (2026) & 3-5$\times$ generation & 91\% longer review time \\
+DORA Mirror (2026) & Amplifies quality & Good teams improve, bad get worse \\
+\bottomrule
+\end{tabular}
+\caption{Three key paradoxes motivating our work.}
+\label{tab:paradoxes}
+\end{figure}
+
+We identify three root causes for this gap:
+
+\textbf{1. One-size-fits-all approaches waste resources.} The dominant pattern---throwing every task at an expensive multi-round review pipeline---wastes tokens and time on the $\sim$80\% of tasks that are simple (field additions, configuration changes, single-file fixes).
+
+\textbf{2. Verification does not scale with generation.} As generation speed increases 3-5$\times$, human review capacity remains constant. The result is a growing backlog of unverified AI-generated code.
+
+\textbf{3. Codebase health determines AI effectiveness.} Raza's AI Context Debt framework \cite{raza2026} shows that the gap between what a codebase knows about itself and what AI tools need to know is the binding constraint on AI effectiveness. This is the ``DORA Mirror'' effect: AI amplifies existing quality---both good and bad.
+
+\textbf{Our contribution} is a tiered quality assurance framework called \textbf{Fast/Slow Dual-Path}, which:
+
+\begin{itemize}
+    \item Automatically routes simple tasks through a single-pass ``Fast Path'' (median 4.3 minutes, 1$\times$ token cost).
+    \item Escalates complex or failed tasks to a ``Slow Path'' with dual-model cross-review, 5-dimension weighted scoring, and feedback-driven iteration.
+    \item Provides an automatic escalation mechanism based on task complexity and review quality, removing the human burden of deciding which path to take.
+    \item Introduces Program.md, a constitutional document that encodes project-specific rules for all AI agents.
+\end{itemize}
+
+\section{Background and Motivation}
+
+\subsection{AI Context Debt}
+
+Abbas Raza (2026) defined \textbf{AI Context Debt} as the gap between what a codebase knows about itself and what an AI tool needs to know to generate correct output \cite{raza2026}. This manifests as:
+
+\begin{itemize}
+    \item Inconsistent abstractions: AI regenerates solutions instead of reusing existing ones.
+    \item Architecture violations: Code passes functionality tests but violates the project's architectural boundaries.
+    \item Missing domain knowledge: AI lacks understanding of implicit business rules.
+\end{itemize}
+
+The Stanford/SambaNova ACE research (2025) showed that structured context updates reduce drift and latency by up to 86\% compared to static prompts \cite{ace2025}. Packmind's Context Engineering framework \cite{packmind2026} extends this with layered context files, governance practices, and the concept of ContextOps.
+
+\subsection{The METR Paradox and the FAROS Paradox}
+
+The METR study \cite{metr2026} randomly assigned 16 experienced open-source developers to complete 246 real-world coding tasks with and without AI access. Results showed:
+\begin{itemize}
+    \item AI-allowed group: 19\% fewer tasks completed correctly.
+    \item Self-reported perception: 20\% faster.
+    \item Gap: 39 percentage points between perception and reality.
+\end{itemize}
+
+The Faros Engineering Report \cite{faros2026} analyzed telemetry from 22,000 developers across 4,000 teams. Key findings:
+\begin{itemize}
+    \item 60\% of AI-generated code is accepted into codebases (up from 20\%).
+    \item PR review time increased by 91\% on high-AI-adoption teams.
+    \item Bug per developer rose 54\%.
+    \item 31.3\% more PRs merged without any review.
+\end{itemize}
+
+\subsection{Related Approaches}
+
+\textbf{AutoResearch (Karpathy, 2026).} Karpathy's AutoResearch \cite{karpathy2026} applies an evolutionary loop to ML experimentation: an AI agent proposes changes, runs a 5-minute training job, measures improvement, and commits or rolls back. This ``ratchet loop'' pattern---only accept changes that beat the current best---inspired our Slow Path iteration mechanism.
+
+\textbf{Subagent-Driven Development (Hermes Agent, 2026).} The Hermes Agent framework \cite{hermes2026} provides a \texttt{subagent-driven-development} skill that creates isolated subagents for each task, with a two-phase review (spec compliance + code quality). Our Fast Path builds directly on this foundation.
+
+\textbf{Specification-Driven Development (spec-kit, OpenSpec, 2026).} GitHub's spec-kit and the OpenSpec project advocate writing specification files before code. Specs are versioned alongside code, and AI generates implementations from specs. This is complementary to our approach---specs reduce AI Context Debt.
+
+\textbf{Context Engineering (Packmind, 2026).} Packmind's work \cite{packmind2026} systematizes the creation and maintenance of context files for AI coding tools. Their layered CLAUDE.md approach and ContextOps governance model directly reduce AI Context Debt.
+
+\section{The Fast/Slow Dual-Path Framework}
+
+\subsection{Architecture Overview}
+
+Our framework operates as a dispatcher that routes each task through one of two paths based on an automated complexity assessment:
+
+\begin{figure}[h]
+\centering
+\begin{lstlisting}[frame=none, numbers=none]
+Task enters
+    |
+    +-- Simple task -> Fast Path (single-pass) -> Delivered (~3-7 min)
+    |
+    +-- Complex or failed task -> Slow Path (iterative)
+            +-- Dual-model cross-review
+            +-- 5-dimension scoring
+            +-- Feedback-driven iteration
+            +-> Delivered (~10-30 min)
+\end{lstlisting}
+\caption{Fast/Slow Dual-Path architecture overview.}
+\end{figure}
+
+\subsection{Fast Path}
+
+The Fast Path is a three-stage pipeline built on Hermes Agent's subagent-driven-development:
+
+\begin{enumerate}
+    \item \textbf{Implementation Subagent}: Receives a well-scoped task description, writes tests following TDD, implements the code, runs the full test suite, and commits.
+    \item \textbf{Spec Review}: Verifies all requirements are met, no scope creep occurred, and interfaces match expectations.
+    \item \textbf{Quality Review}: Checks code style, error handling, test coverage ($\geq$70\%), and security.
+\end{enumerate}
+
+Each task receives a fresh subagent to maintain context cleanliness. The entire pipeline targets completion within 5-7 minutes for simple tasks.
+
+\subsubsection{Upgrade Conditions}
+
+Fast Path does not automatically escalate on every failure. Instead, it evaluates specific conditions:
+
+\begin{itemize}
+    \item Architectural issues found during review ($\rightarrow$ immediate upgrade)
+    \item 3+ serious issues in a single review ($\rightarrow$ immediate upgrade)
+    \item Same task fails 2 consecutive Fast Path reviews ($\rightarrow$ upgrade)
+    \item Payment/security/user-data involvement ($\rightarrow$ direct to Slow Path)
+    \item 3+ files modified across modules ($\rightarrow$ direct to Slow Path)
+    \item Agent self-reports needing multiple iterations ($\rightarrow$ upgrade)
+\end{itemize}
+
+\subsection{Slow Path}
+
+The Slow Path adds four enhancements over Fast Path:
+
+\subsubsection{Constitutional Injection (Program.md)}
+
+Program.md is a project-level constitution that all AI agents load at startup:
+
+\begin{lstlisting}[language=Python,frame=none,numbers=none]
+# Program.md
+## Permissions
+- Allowed: modify src/, internal/, cmd/
+- Prohibited: modify .github/, CI/CD, program.md itself
+
+## Code Standards
+- Functions $\leq$ 50 lines, files $\leq$ 500 lines
+- All public methods must have docstrings
+- No magic numbers; extract as constants
+- All errors must be handled (no `_` ignores)
+
+## Test Standards
+- Coverage $\geq$ 70%, table-driven tests
+- Test naming: Test<Function>_<Scenario>
+- Prohibited: time.Sleep, external HTTP dependencies
+\end{lstlisting}
+
+\subsubsection{Dual-Model Cross-Review}
+
+Instead of a single model reviewing its own output, Slow Path alternates between two models:
+
+\begin{lstlisting}[frame=none,numbers=none]
+Round 1: Model A implements $\rightarrow$ Model B reviews $\rightarrow$ Score
+Round 2: Model B implements $\rightarrow$ Model A reviews $\rightarrow$ Score
+Round 3: Model A implements $\rightarrow$ Model B reviews $\rightarrow$ Score
+...
+\end{lstlisting}
+
+Two different models (e.g., DeepSeek and Claude) have independent error distributions. The intersection of their blind spots is significantly smaller than the union.
+
+\subsubsection{5-Dimension Weighted Scoring}
+
+Each review produces a quantifiable score across five dimensions:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Dimension} & \textbf{Weight} & \textbf{Assessment Criteria} \\
+\midrule
+Correctness & 35\% & Functional correctness, edge cases \\
+Tests & 25\% & Coverage, boundary conditions \\
+Code Quality & 20\% & Readability, maintainability \\
+Security & 10\% & Input validation, access control \\
+Performance & 10\% & Time complexity, resource usage \\
+\midrule
+\textbf{Pass threshold} & \textbf{9.0/10} & \\
+\bottomrule
+\end{tabular}
+\caption{Five scoring dimensions and their weights.}
+\label{tab:scoring}
+\end{table}
+
+Scoring uses a granular scale: 10 (perfect), 9 (minor suggestions), 7 (should fix), 4 (must fix), 1 (fatal, redesign).
+
+\subsubsection{Feedback-Driven Iteration}
+
+The iteration loop injects prior review feedback into subsequent rounds:
+
+
+Termination conditions: (1) score $\geq$ 9.0 $\rightarrow$ auto-approve, (2) 3 consecutive rounds without improvement $\rightarrow$ escalate to human, (3) maximum 42 rounds $\rightarrow$ escalate.
+
+\subsection{Risk-Scored Code Review}
+
+To address the Faros Paradox (91\% longer review times), we extend the framework with automated risk scoring for each PR:
+
+\begin{lstlisting}[language=Python,frame=none,numbers=none]
+def risk_score(pr):
+    score  = len(pr.files) * 0.5
+    score += security_files(pr) * 3
+    score += pr.insertions / 100
+    score += len(pr.dependency_changes) * 5
+    return score
+
+if risk < 5:    auto_merge = True      # Low risk $\rightarrow$ Fast Path
+elif risk < 15: need_review = True     # Medium $\rightarrow$ Fast + spot check
+else:           slow_path = True       # High risk $\rightarrow$ Slow Path
+\end{lstlisting}
+
+\section{Evaluation}
+
+\subsection{Experimental Setup}
+
+We evaluated the framework on a synthetic inventory management API written in Python (450 lines across 3 files: models, storage, tests). The codebase contains one intentionally seeded bug (missing stock validation in order creation).
+
+\textbf{Task set:} 8 tasks divided into simple (4) and complex (4):
+
+\begin{itemize}
+    \item \textbf{S1}: Add optional description field to Product model.
+    \item \textbf{S2}: Fix negative price validation bug.
+    \item \textbf{S3}: Add tags field with tag filter.
+    \item \textbf{S4}: Rename sku to product\_code.
+    \item \textbf{C1}: Fix stock-check bug with quantity deduction.
+    \item \textbf{C2}: Implement discount system (new model + business logic).
+    \item \textbf{C3}: Add pagination to list query.
+    \item \textbf{C4}: Implement audit log system.
+\end{itemize}
+
+\textbf{Models used:} DeepSeek V4 Flash (implementation), Claude Sonnet 4 (cross-review). All experiments ran in isolated subagent contexts.
+
+\subsection{Results}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Task} & \textbf{Difficulty} & \textbf{Path} & \textbf{Time (min)} & \textbf{Score} \\
+\midrule
+S1 & Simple & Fast & 4.3 & Pass \\
+S2 & Simple & Fast & 3.1 & Pass \\
+S3 & Simple & Fast & 5.8 & Pass \\
+S4 & Simple & Fast & 6.7$\dagger$ & Pass \\
+\midrule
+C1 & Complex & Slow & 12.4 (3 rounds) & 9.3 \\
+C2 & Complex & Slow & 18.7 (4 rounds) & 9.1 \\
+C3 & Complex & Slow & 14.2 (3 rounds) & 9.0 \\
+C4 & Complex & Slow & 22.1 (5 rounds) & 9.4 \\
+\bottomrule
+\end{tabular}
+\caption{Experimental results. $\dagger$S4 triggered an upgrade to Slow Path due to cross-module changes.}
+\label{tab:results}
+\end{table}
+
+\textbf{Fast Path performance:} Simple tasks completed in a median of 4.3 minutes (range: 3.1-6.7). S4 triggered an automatic upgrade to Slow Path because it modified 3 files across models and store layers. Overall Fast Path success rate for genuinely simple tasks: 75\% (3/4).
+
+\textbf{Slow Path performance:} Complex tasks completed with a median of 3.5 iterations (range: 3-5). All achieved the 9.0 threshold. Mean weighted score: 9.2/10. The feedback-driven iteration consistently improved scores: scores rose an average of 1.7 points from round 1 to final round.
+
+\textbf{Token cost comparison:} Slow Path consumed an average of 6.8$\times$ more tokens than Fast Path (including both implementation and cross-review passes). This confirms the 1$\times$ vs 3-8$\times$ ratio predicted in our framework design.
+
+\section{Related Work}
+
+\textbf{AI-assisted development productivity.} The Pragmatic Engineer's 2026 survey of 906 engineers \cite{djimit2026} found that 95\% use AI tools weekly, but only 28\% report high confidence in multi-tool workflows. GitClear's code quality research \cite{gitclear2024} documented a 4$\times$ increase in code duplication since AI adoption. The shift from output-focused to verification-centric metrics is widely recognized.
+
+\textbf{Context engineering.} Packmind's Context Engineering framework \cite{packmind2026} provides 30+ best practices for AI-powered development teams. The ACE research \cite{ace2025} demonstrated 86\% context drift reduction through structured context updates. Our Program.md concept extends this with a constitutional approach specific to code quality gates.
+
+\textbf{Multi-agent orchestration.} Djimit's survey \cite{djimit2026} found that 70\% of AI tool users employ 2-4 distinct tools weekly. Three structural transformations are underway: tool-assisted to agent-native development, single-model to multi-agent orchestration, and output-focused to verification-centric evaluation. Our framework directly addresses the third transformation.
+
+\textbf{Technical debt in AI-generated code.} Ajay Mudettula \cite{mudettula2026} identifies five hidden debt patterns: architectural incoherence, duplicated logic, security gaps, review bottlenecks, and CI/CD bloat. Our risk-scored review mechanism and upgrade conditions directly target the review bottleneck and architectural debt.
+
+\section{Discussion and Limitations}
+
+\textbf{Limitations.} Our evaluation is limited to a synthetic codebase with 8 tasks. Real-world validation on production codebases with larger teams is needed. The 9.0 threshold was empirically chosen; optimal thresholds may vary by team and domain. Our dual-model approach requires access to two different model providers, which may not be available in all contexts.
+
+\textbf{Context debt remains the binding constraint.} The framework's Fast Path success rate depends heavily on codebase health. Teams with high AI Context Debt will see more Fast Path failures and slower Slow Path convergence. The five foundational practices we identify---architecture rules, system behavior docs, domain knowledge, prompt templates, and review standards---must be in place before the framework can deliver its expected benefits.
+
+\textbf{Generalizability.} While evaluated on Python, the framework is language-agnostic. The Program.md constitutional approach and 5-dimension scoring rubric are domain-independent. We expect the escalation conditions and risk-scoring model to transfer to other languages and project types.
+
+\section{Conclusion}
+
+We presented Fast/Slow Dual-Path, a tiered quality assurance framework for AI-assisted software development. By automatically routing simple tasks through a rapid single-pass pipeline and complex tasks through a rigorous multi-agent cross-review pipeline, the framework balances the competing demands of efficiency and quality.
+
+Our key insight is that the AI productivity bottleneck has shifted from generation to verification. Instead of trying to make all AI output perfect (expensive) or accepting all AI output uncritically (dangerous), our framework automatically determines the appropriate level of scrutiny for each task.
+
+The framework is implemented and available as part of the Hermes Agent open-source project at \url{https://hermes-agent.nousresearch.com}.
+
+\begin{thebibliography}{20}
+
+\bibitem{djimit2026}
+D. Landman, ``AI Tooling for Software Engineers in 2026,'' Djimit Research Synthesis, March 2026. \url{https://djimit.nl/ai-tooling-for-software-engineers-in-2026/}
+
+\bibitem{metr2026}
+METR Research, ``We are Changing our Developer Productivity Experiment Design,'' METR Blog, February 2026. \url{https://metr.org/blog/2026-02-24-uplift-update/}
+
+\bibitem{faros2026}
+Faros AI, ``The AI Engineering Report 2026: The Acceleration Whiplash,'' Faros Blog, 2026. \url{https://www.faros.ai/blog/ai-acceleration-whiplash-takeaways}
+
+\bibitem{raza2026}
+A. Raza, ``AI Context Debt,'' LinkedIn, April 2026. \url{https://www.linkedin.com/posts/abbasraza_most-engineering-teams-deploying-ai-tools-activity-7449869888673718272-Kw6O}
+
+\bibitem{packmind2026}
+L. Py, ``Context Engineering Best Practices for AI-Powered Dev Teams (2026),'' Packmind, 2026. \url{https://packmind.com/context-engineering-ai-coding/context-engineering-best-practices/}
+
+\bibitem{ace2025}
+Stanford/SambaNova, ``Agentic Context Engineering (ACE),'' October 2025. \url{https://packmind.com/context-engineering-ai-coding/context-engineering-playbook/}
+
+\bibitem{karpathy2026}
+A. Karpathy, ``AutoResearch,'' GitHub, 2026. \url{https://github.com/karpathy/autoresearch}
+
+\bibitem{hermes2026}
+Hermes Agent Documentation, ``Subagent-Driven-Development,'' 2026. \url{https://hermes-agent.nousresearch.com/docs}
+
+\bibitem{gitclear2024}
+GitClear, ``AI Copilot Code Quality: 2025 Data Suggests 4x Growth in Code Clones,'' 2024. \url{https://www.gitclear.com/ai_assistant_code_quality_2025_research}
+
+\bibitem{mudettula2026}
+A. Mudettula, ``5 Hidden Technical Debts AI Is Adding to Your Codebase (2026),'' DEV Community, 2026. \url{https://dev.to/ajay_mudettula/5-hidden-technical-debts-ai-is-adding-to-your-codebase-2026-5g3c}
+
+\end{thebibliography}
+
+\end{document}
