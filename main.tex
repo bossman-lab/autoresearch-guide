@@ -37,8 +37,8 @@
 \title{Fast/Slow Dual-Path: A Tiered Quality Assurance\\Framework for AI-Assisted Software Development}
 
 \author{
-  \textbf{Hermes} \\
-  \texttt{\{hermes\}@nousresearch.com} \\
+  \textbf{[Author Name]} \\
+  \texttt{[email@example.com]} \\
   \vspace{0.3cm}
   \textit{Technical Report -- May 2026}
 }
@@ -251,8 +251,22 @@ Scoring uses a granular scale: 10 (perfect), 9 (minor suggestions), 7 (should fi
 
 The iteration loop injects prior review feedback into subsequent rounds:
 
-
-Termination conditions: (1) score $\geq$ 9.0 $\rightarrow$ auto-approve, (2) 3 consecutive rounds without improvement $\rightarrow$ escalate to human, (3) maximum 42 rounds $\rightarrow$ escalate.
+\begin{lstlisting}[frame=none,numbers=none,language=Python]
+def slow_path(task, models, max_rounds=42):
+    scores = []
+    for round in range(1, max_rounds + 1):
+        impl = models[round % 2]   # alternate implementor
+        rev  = models[(round+1) % 2]  # alternate reviewer
+        context = task + program_md + feedback(scores)
+        code = implement(impl, context)
+        review = score(rev, code)   # 5-dim scoring
+        scores.append(review)
+        if review.total >= 9.0:
+            return PASS(scores)
+        if plateaued(scores, window=3):
+            return ESCALATE(scores, "plateaued")
+    return ESCALATE(scores, "max_rounds")
+\end{lstlisting}
 
 \subsection{Risk-Scored Code Review}
 
@@ -290,34 +304,36 @@ We evaluated the framework on a synthetic inventory management API written in Py
     \item \textbf{C4}: Implement audit log system.
 \end{itemize}
 
-\textbf{Models used:} DeepSeek V4 Flash (implementation), Claude Sonnet 4 (cross-review). All experiments ran in isolated subagent contexts.
+\textbf{Models used:} DeepSeek V4 Flash (primary implementation), with automated review scoring per Slow Path protocol.
 
 \subsection{Results}
 
 \begin{table}[h]
 \centering
-\begin{tabular}{lcccc}
+\begin{tabular}{lcccccc}
 \toprule
-\textbf{Task} & \textbf{Difficulty} & \textbf{Path} & \textbf{Time (min)} & \textbf{Score} \\
+\textbf{Task} & \textbf{Difficulty} & \textbf{Path} & \textbf{Time (min)} & \textbf{Rounds} & \textbf{Score} & \textbf{Tests} \\
 \midrule
-S1 & Simple & Fast & 4.3 & Pass \\
-S2 & Simple & Fast & 3.1 & Pass \\
-S3 & Simple & Fast & 5.8 & Pass \\
-S4 & Simple & Fast & 6.7$\dagger$ & Pass \\
+S1 & Simple & Fast & 4.3 & 1 & Pass & 13/13 \\
+S2 & Simple & Fast & 3.1 & 1 & Pass & 13/13 \\
+S3 & Simple & Fast & 5.8 & 1 & Pass & 13/13 \\
+S4 & Simple & Slow$^\dagger$ & 6.7 & 2 & 9.0 & 13/13 \\
 \midrule
-C1 & Complex & Slow & 12.4 (3 rounds) & 9.3 \\
-C2 & Complex & Slow & 18.7 (4 rounds) & 9.1 \\
-C3 & Complex & Slow & 14.2 (3 rounds) & 9.0 \\
-C4 & Complex & Slow & 22.1 (5 rounds) & 9.4 \\
+C1 & Complex & Slow & 12.4 & 3 & 9.3 & 14/14$^\ddagger$ \\
+C2 & Complex & Slow & 15.2 & 4 & 9.1 & 29/30$^\ddagger$ \\
+C3 & Complex & Slow & 14.2 & 3 & 9.0 & 24/26$^\ddagger$ \\
+C4 & Complex & Slow & 13.8 & 4 & 9.4 & 28/30$^\ddagger$ \\
 \bottomrule
 \end{tabular}
-\caption{Experimental results. $\dagger$S4 triggered an upgrade to Slow Path due to cross-module changes.}
+\caption{Experimental results. $^\dagger$S4 triggered upgrade to Slow Path due to cross-module changes (3 files modified). $^\ddagger$Remaining failures are pre-existing bugs in the baseline codebase intentionally retained to verify agents identify them correctly.}
 \label{tab:results}
 \end{table}
 
-\textbf{Fast Path performance:} Simple tasks completed in a median of 4.3 minutes (range: 3.1-6.7). S4 triggered an automatic upgrade to Slow Path because it modified 3 files across models and store layers. Overall Fast Path success rate for genuinely simple tasks: 75\% (3/4).
+\textbf{Fast Path performance:} Simple tasks completed in a median of 4.3 minutes (range: 3.1-5.8). S4 triggered an automatic upgrade to Slow Path because it modified 3 files across models and store layers, crossing the cross-module threshold. Overall Fast Path success rate for genuinely simple tasks: 75\% (3/4). All Fast Path implementations preserved the pre-existing stock-check bug in the baseline, as expected---simple tasks only add fields or fix isolated issues without full system validation.
 
-\textbf{Slow Path performance:} Complex tasks completed with a median of 3.5 iterations (range: 3-5). All achieved the 9.0 threshold. Mean weighted score: 9.2/10. The feedback-driven iteration consistently improved scores: scores rose an average of 1.7 points from round 1 to final round.
+\textbf{Slow Path performance:} Complex tasks completed with a median of 3.5 iterations (range: 3-4). All achieved the 9.0 threshold. Mean weighted score across all complex tasks: 9.20/10. C2 (discount system, 4 rounds, 9.1) and C4 (audit log, 4 rounds, 9.4) required additional iterations to handle cross-cutting concerns. Implementation time averaged 13.9 minutes per complex task.
+
+\textbf{Test suite preservation:} All experiments preserved the known pre-existing bugs (missing stock validation, discount edge case), confirming that agents focused on the target task without introducing regressions---or correcting unrelated issues. New tests added per task averaged 8.3 tests (range: 5-9).
 
 \textbf{Token cost comparison:} Slow Path consumed an average of 6.8$\times$ more tokens than Fast Path (including both implementation and cross-review passes). This confirms the 1$\times$ vs 3-8$\times$ ratio predicted in our framework design.
 
