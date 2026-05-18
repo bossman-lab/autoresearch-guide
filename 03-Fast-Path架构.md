@@ -1,9 +1,4 @@
----
-title: "Fast Path 详解：Hermes Subagent-Driven-Development 基线方案"
-date: 2026-05-18
-author: "提灯人"
-tags: [AI, Agent, AutoResearch, 质量工程, FastSlow, Hermes]
----
+## 三、Fast Path 的架构
 
 Fast Path 即 Hermes Agent 现有的 `subagent-driven-development` skill（SDD）。
 
